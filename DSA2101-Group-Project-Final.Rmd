@@ -1,0 +1,533 @@
+---
+title: "DSA2101 Group Project"
+author:
+  - Chan Pei Yu Sarah
+  - Isaiah Lee Wei En
+  - Kor Jia Rui
+  - Marcus Wong Wen Hao
+  - Tao Yu Cheng
+  - Xander Goh Zhao Hang
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+# Global options for the RMarkdown document
+knitr::opts_chunk$set(include = TRUE,
+                      message = FALSE, warning = FALSE, 
+                      fig.align = "center",  out.width = "80%")
+```
+
+```{r Loading Packages and Dataset}
+# Loading Packages needed
+library(tidyverse)
+library(readxl)
+library(stringr)
+library(lubridate)
+library(maps)
+library(ggplot2)
+library(maps)
+library(ggrepel)
+library(rnaturalearth, rnaturalearthdata)
+library(sf)
+
+# Load datasets
+expeditions <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/main/data/2025/2025-01-21/exped_tidy.csv')
+peaks <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/main/data/2025/2025-01-21/peaks_tidy.csv')
+```
+
+# Introduction
+
+The [Himalayas](https://en.wikipedia.org/wiki/Himalayas) is a mountain range in Asia, bordered by 6 countries, Nepal, China, Pakistan, Bhutan, India, Afghanistan **(Shiba & Barry, 2025)**. It is home to nine of the world's ten tallest peaks, and is one of the most popular regions for climbers all over the world.
+
+The [Himalayan Dataset](https://github.com/rfordatascience/tidytuesday/tree/main/data/2025/2025-01-21) from TidyTuesday contains information about climbing expeditions in the Himalayas from 2020 to 2024, along with characteristics of the peaks that climbers attempt to summit **(Nicolas, 2025)**.
+
+## Datasets {.tabset}
+
+### Expedition Dataset
+```{r, echo = F}
+head(expeditions, 3)
+```
+
+### Peaks Dataset
+```{r, echo = F}
+head(peaks, 3)
+```
+
+## {.unlisted .unnumbered}
+
+There are 2 sub-datasets:
+
+  1.  **The Expedition dataset** contains details about individual expeditions, such as the year, season and whether oxygen was used during the journey.
+  2.  **The Peaks dataset** contains information about peaks in the Himalayas, including their height, location and region name.
+
+Climbing in the Himalayas is a physically demanding and high-risk pursuit, where the likelihood of success can vary significantly based on several factors. Understanding the impact of these factors on expedition success is not only relevant but essential to help climbing teams better plan and prepare for expeditions.
+
+In addition, we decided to merge both datasets to make full use of the data we have and explore the relationships between between expedition success rate and possible influential factors such as peak region, oxygen used and expedition type.
+
+Therefore, we propose the following guiding question:<br>
+
+<span style="font-size: 20px;">**"What factors influence the success rate of expeditions?"**<br><br>
+
+
+# Data Cleaning
+
+During data cleaning, we found 2 inconsistent data points. Expedition `EVER21110` failed all 4 routes, yet it was classified as Success (Main Peak). Expedition `MANA22315` was successful in Route 1 and reached the maximum height of the peak, but it was classified as Success(subpeak, foresummit). We have decided to remove these 2 data points to improve the accuracy of our data.
+
+```{r}
+expeditions %>%
+  mutate(success = SUCCESS1|SUCCESS2|SUCCESS3|SUCCESS4, 
+         success_2 = ifelse(TERMREASON == 1, TRUE, FALSE)) %>%
+  select(EXPID, PEAKID, SMTDATE, success, SUCCESS1, SUCCESS2, SUCCESS3, SUCCESS4, TERMREASON, success_2) %>%
+  filter(success != success_2)
+```
+
+We also removed variables such as `ROUTE3`, `ROUTE4`, `SUCCESS3` and `SUCCESS4` as they did not contain any observations since all expeditions in this dataset only used up to 2 routes. In addition, we removed disputed expeditions that claimed to be a success (EXPID: `CBAM23401`) as we are unable to verify the reliability of such claims.
+
+Both datasets were also merged for easier data manipulation and to more effectively explore the relationships between between expedition success rate and possible influential factors such as peak region, oxygen used and expedition type.
+
+```{r}
+expeditions %>%
+  filter(ROUTE3 != FALSE | ROUTE4 != FALSE | SUCCESS3 != FALSE | SUCCESS4 != FALSE)
+
+expeditions %>%
+  filter(TERMREASON_FACTOR == "Success (main peak)" & DISPUTED == T)
+
+merged_df <- expeditions %>%
+  left_join(peaks, by = "PEAKID")
+
+clean_df <- merged_df %>%
+  mutate(success = ifelse(TERMREASON == 1, TRUE, FALSE)) %>%
+  select(-ROUTE3, -ROUTE4, -SUCCESS3, -SUCCESS4) %>%
+  filter(EXPID != 'CBAM23401' & EXPID != 'EVER21110' & EXPID != 'MANA22315')
+```
+<br><br>
+
+
+# Summary
+
+Next, we performed some exploratory data analysis on the data to note any interesting observations and trends in relation to our guiding question.
+
+We first took a look at the impact of different seasons on the popularity of expeditions. Not surprisingly, spring and autumn are the most popular choices to climb as the temperature at base camp is higher and the weather patterns are more predictable than winter. Good visibility also allows climbers to get the most out of their expedition **(Protrek Adventure, n.d.)**.
+
+Interestingly, one may assume summer would be the most desirable season for expeditions since we generally associate it with higher, more comfortable temperatures. However, summer in the Himalayas also means highly unpredictable storms and extreme fog due to the monsoon, making climbing extremely dangerous **(Furtenbach Adventures, n.d.)**. This explains the much lower number of expeditions recorded in the summer season (5) as compared to more popular seasons of autumn (393) and spring (461).
+
+```{r}
+season_success <- clean_df %>%
+  group_by(SEASON_FACTOR) %>%
+  summarise(count = n(), succ_rate = round(mean(success == TRUE) * 100,2), .groups = "drop") %>%
+  mutate(percentage = round(count/sum(count)*100,3)) %>%
+  relocate(percentage, .before = succ_rate)
+
+season_success
+```
+
+We also took a look at how expedition success rates have changed across the years. We observed that most expeditions (71.2%) were successful in reaching the main peak. Since 2021, the success rate has been steadily increasing, rising from 60.2% to 81.0% in 2024. The increase in success rate could be attributed to several factors, including enhanced manpower, advancements in gear quality and the popularisation of commercial routes. As climbers become more better equipped and better trained, the success rate of expeditions continue to rise.
+
+```{r}
+yearly_success <- clean_df %>%
+  group_by(YEAR) %>%
+  summarise(success_rate = round(mean(TERMREASON == 1) * 100, 2)) %>%
+  ungroup() %>%
+  mutate(YEAR = as.character(YEAR))
+
+overall_success <- clean_df %>%
+  summarise(YEAR = "Overall", success_rate = round(mean(TERMREASON == 1) * 100, 2))
+
+bind_rows(yearly_success, overall_success)
+```
+
+We also compared the number of expeditions across different mountain peaks to identify the most popular peaks. With the exception of 2020 and 2022, Mount Everest remains the most popular mountain peak for expeditions, thanks to its reputation as the highest peak on Earth. The top 3 most population mountains (Everest, Ama Dablam, Manaslu) represents 49.0% of all expeditions attempted from 2020 to 2024.
+
+```{r}
+clean_df %>%
+  group_by(YEAR, PEAKID) %>%
+  summarise(count = sum(n())) %>%
+  pivot_wider(names_from = YEAR, values_from = (count), values_fill = 0) %>%
+  ungroup() %>%
+  mutate(total = rowSums(across(`2020`:`2024`)), 
+         percentage = round(total/nrow(expeditions)*100,2)) %>%
+  arrange(desc(total)) %>%
+  slice_max(total, n = 6)
+```
+
+Finally, to aid in answering our guiding question, we have selected some variables to be used in our plots. A description of said variables are shown below.
+
+<span style="font-size: 15px;">`HIMAL_FACTOR <chr>`
+
+This tells us the name of the mountain, which was later used in our dataset in attempts to draw a relationship between success and the height of a mountain.
+
+<span style="font-size: 15px;">`TOTMEMBERS, TOTHIRED <int>`
+
+Reflects the number of members and hired personnel respectively for an expedition. Was augmented later to give a ratio, with the idea that there is a threshold needed for differing team sizes in order to maximise success.
+
+<span style="font-size: 15px;">`COMRTE <logical>`
+
+Tells us if a route taken was commercial. This variable was picked to find out if it was true that a commercial route would increase safety (with the assumption that the route would be well tested). 
+
+<span style="font-size: 15px;">`SMTDAYS <int>`
+
+Reflects the number of days needed to reach the summit. Conventionally, we expect slower climbs to help with acclimatization and hence be safer **(Adventure Alternative, n.d.)**. Was later used against `O2NONE` (see below) to identify any optimal combinations of climbing speed with the use of oxygen.
+
+<span style="font-size: 15px;">`O2NONE <logical>`
+
+Tells us if supplemental oxygen was not used for the expedition. Oxygen is paramount for acclimatization as well as rest and recovery. Including this variable was a priority for us. <br><br>
+
+
+# Data Transformation, Visualisation & Discussion
+
+## Visualisation 1: Map
+
+### Data Transformation
+To understand how expedition outcomes vary geographically, we examined the ten most popular Himalayan subranges (`top_peaks`) by filtering based on expedition count and grouping by `HIMAL_FACTOR`. We used `HIMAL_FACTOR` instead of `REGION_FACTOR` to capture more granular geographic variation in expedition outcomes. While `REGION_FACTOR` aggregates multiple ranges into broader zones, `HIMAL_FACTOR` retains subrange-specific detail, allowing us to distinguish between well-known climbing areas like Khumbu and Makalu.
+
+For each region, we calculated the average expedition success rate (`avg_success_rate`) and plotted it alongside the total number of expeditions (`total_expeditions`) and the average peak height (`avg_heightM`). `Latitude`, `Longtitude` coordinates for each subrange were manually specified to ensure accurate placement on the map.
+
+```{r}
+# group peaks by regions (keep top 10 regions)
+top_peaks <- clean_df %>%
+  group_by(HIMAL_FACTOR) %>%
+  summarise(n_expeditions = n(), .groups = "drop") %>%
+  arrange(desc(n_expeditions)) %>%
+  slice_head(n = 10)
+
+# Manually set lat/lon for each general region
+himal_coords <- tibble(
+  HIMAL_FACTOR = c("Khumbu", "Manaslu/Mansiri", "Peri", "Dhaulagiri", "Annapurna",
+                   "Kangchenjunga/Simhalila", "Makalu", "Rolwaling", "Jugal", "Damodar"),
+  Latitude = c(27.93, 28.55, 28.38, 28.70, 28.60,
+               27.70, 27.89, 27.87, 27.85, 29.10),
+  Longitude = c(86.77, 84.65, 85.30, 83.50, 83.83,
+                88.15, 87.09, 86.45, 85.67, 84.12)
+)
+
+# Data cleaning and preparation
+plot_prep <- clean_df %>%
+  filter(HIMAL_FACTOR %in% top_peaks$HIMAL_FACTOR) %>%
+  group_by(HIMAL_FACTOR) %>%
+  summarise(
+    total_expeditions = n(),
+    avg_success_rate = mean(TERMREASON_FACTOR == "Success (main peak)", na.rm = TRUE),
+    avg_heightM = mean(HEIGHTM)) %>%
+  left_join(himal_coords, by = "HIMAL_FACTOR")
+
+```
+
+### Data Visualisation
+Next, we visualised the geographical distribution of Himalayan expeditions and their success rates using a map. A map was most suitable given the nature of our geographical data, and it would also help us easily compare the success rate and number of expeditions across the different regions. The plot displayed each region's `avg_success_rate`, `total_expeditions`, and `avg_heightM`. The regions were represented by circles, where the size of the circles corresponded to `total_expeditions`, and the color gradient indicated the `avg_success_rate` (ranging from red for low success to green for high success). Labels for `avg_heightM` were added to each region, and country boundaries were included for context. We also added a custom annotation to highlight Everest in the Khumbu region for its particularly high success rate and popularity among climbers.
+
+```{r, fig.cap = "Map of Himalayan expeditions by subrange where Khumbu has the highest number of expeditions and success rate"}
+# Load base map
+world_map <- map_data("world")
+
+# Get political borders
+countries <- ne_countries(scale = "medium", returnclass = "sf")
+
+# Filter for Nepal, China, India
+himalayan_countries <- countries %>%
+  filter(admin %in% c("Nepal", "China", "India"))
+
+# Centroids for country labels
+country_labels <- st_centroid(himalayan_countries)
+
+# Adjusted label for Nepal
+nepal_label <- tibble(
+  admin = "Nepal",
+  Longitude = 82.5,
+  Latitude = 28.5
+)
+
+# Plot
+ggplot() +
+  geom_polygon(data = world_map, aes(x = long, y = lat, group = group),
+               fill = "lightgray", color = "white") +
+
+  # Expedition bubbles by region
+  geom_point(data = plot_prep, aes(x = Longitude, y = Latitude,
+                                   size = total_expeditions,
+                                   color = avg_success_rate),
+             alpha = 0.8) +
+
+  # Updated size scale: better proportional sizing
+  scale_size_area(
+    max_size = 16,
+    breaks = c(10, 25, 50, 100),
+    name = "Expeditions"
+  ) +
+
+  scale_color_gradient2(
+  low = "red", mid = "yellow", high = "green",
+  midpoint = 0.675, limits = c(0.5, 0.85),
+  name = "Success Rate",
+  labels = scales::label_percent(accuracy = 1),
+  guide = guide_colorbar(
+    title.position = "top",
+    title.hjust = 0.5,
+    label.position = "bottom",
+    label.hjust = 0.5,
+    barwidth = unit(6, "cm"),
+    barheight = unit(0.5, "cm")
+  )
+) +
+
+  # Peak height labels
+  geom_text_repel(data = plot_prep, aes(x = Longitude, y = Latitude,
+                                        label = paste0(round(avg_heightM), "m")),
+                  size = 3, fontface = "bold", color = "black",
+                  nudge_y = -0.15, segment.color = NA) +
+
+  # Nepal label manually positioned
+  geom_text(data = nepal_label, aes(x = Longitude, y = Latitude, label = admin),
+            fontface = "bold", size = 5, color = "black") +
+
+  # Other country labels
+  geom_text_repel(data = country_labels %>% filter(admin != "Nepal"),
+                  aes(x = st_coordinates(geometry)[, 1],
+                      y = st_coordinates(geometry)[, 2],
+                      label = admin),
+                  fontface = "bold", size = 5, color = "black",
+                  nudge_y = 1, nudge_x = 0.5, segment.color = NA) +
+
+  theme_minimal() +
+  labs(
+  title = "Himalayan Expeditions by Subrange",
+  x = "Longitude",
+  y = "Latitude"
+) +
+  theme(
+  legend.position = "bottom",
+  legend.box = "horizontal",
+  legend.box.just = "center",
+  legend.title = element_text(face = "bold", hjust = 0.5),
+  legend.text = element_text(hjust = 0.5),
+  plot.title = element_text(hjust = 0.5, face = "bold"),
+  axis.title.x = element_text(hjust = 0.5),
+  axis.title.y = element_text(hjust = 0.5)
+) +
+guides(
+  size = guide_legend(title = "Number of Expeditions", override.aes = list(color = "black")),
+  color = guide_colorbar(title = "Success Rate", title.position = "top")
+) +
+  coord_quickmap(xlim = c(82, 88), ylim = c(27, 30)) +
+  
+  geom_curve(aes(x = 87, y = 28.6, xend = 86.925, yend = 28.05),
+           arrow = arrow(length = unit(0.02, "npc")),
+           color = "darkblue", linewidth = 0.8, curvature = 0) +
+
+  annotate("text", x = 88.25, y = 28.75,
+         label = "Everest (Khumbu Region)",
+         color = "darkblue", fontface = "bold", size = 3.75, hjust = 1) +
+  annotate("text", x = 86.925, y = 27.988,
+         label = "X", color = 'darkblue', fontface = "bold", size = 3)
+```
+
+### Discussion & Analysis
+The map reveals considerable variation in both popularity and success rates across regions. As mentioned, the Khumbu region stands out with the highest number of expeditions and average success rate. This is largely due to Everest, the world's tallest mountain and most popular peak in the Himalayas. Khumbu not only benefits from extensive infrastructure and commercial support, but also benefits from the large number of climbers, many of whom may be more experienced or well-prepared **(Benavides, 2024)**, which could explain the higher chance of expedition success.
+
+In contrast, regions like Annapurna and Dhaulagiri, despite hosting a large number of expeditions, had noticeably lower success rates. One possible reason is that these regions are known for their unpredictable weather conditions, regular avalanches and difficult climbing terrains **(Karki, 2023; Khanal, 2024)**. As such, even seasoned climbers may be greatly challenged by the harsh conditions and challenging routes, which explains the lower success rate.
+
+Interestingly, there was no clear trend between peak height, expedition volume, and success. Some regions with lower or moderately high peaks still faced low success rates, likely due to more challenging climbing conditions or limited support. This reinforces the idea that, beyond altitude, other regional factors, such as terrain familiarity, weather variability, and climbers' experience, play a critical role in influencing expedition success rates.<br><br>
+
+
+## Visualisation 2: Scatter + Line Plot
+
+### Data Transformation
+
+We were also interested in investigating the relationship between the ratio of hired personnel to total team size and the success rate of climbing expeditions. We decided to create a new variable, `ratio_hired`, which represents the proportion of hired personnel relative to the total number of team members, followed with grouping by `ratio_hired` and `COMTRE`, where the latter is the route type (commercial or non-commercial). This would enable us to better understand how `ratio_hired` influences expedition outcomes (success or failure) and whether there were differences in success rates between commercial and non-commercial routes.
+
+```{r}
+# Create data frame for ratio of hired personnel to team size by route type (commercial)
+team_route_df <- clean_df %>%
+  select(success, COMRTE, TOTMEMBERS, TOTHIRED) %>% 
+  mutate(ratio_hired = TOTHIRED / TOTMEMBERS) %>% 
+  filter(is.finite(ratio_hired)) %>%
+  group_by(COMRTE, ratio_hired) %>%
+  summarise(success_rate = mean(success, na.rm = TRUE)) %>% 
+  ungroup() 
+```
+
+### Data Visualisation
+
+Next, we used a scatter plot to observe the relationship between `ratio_hired` and expedition `success_rate` under both commercial and non-commercial routes which are represented by different colours. We found a scatter plot useful in highlighting the general clustering of data points, which would help us pinpoint which values of `ratio_hired` would give a higher success rate (in this case it was a 1:1 ratio which we will elaborate later).
+
+As the scatter points were quite clustered, we jittered the points to space them out in order to better identify trends in data. A LOESS line plot was added as it would enable us to compare the general trend in success rates between commercial and non-commercial routes more easily. Finally, the x-axis was scaled using a square root transformation to better separate lower `ratio_hired` values, where most observations were concentrated. This made subtle variations in data more visible and easier to interpret. 
+
+```{r, fig.cap = "Scatter/Line Plot of success rates of different routes against ratio of hired personnel to climbers where expeditions taking a commercial route and have higher ratios have a higher success rate"}
+# Success to ratio by route type scatter plot
+ggplot(team_route_df, aes(x = ratio_hired, y = success_rate, color = COMRTE)) +
+  geom_point(position = position_jitter(width = 0.05, height = 0.02), size = 1.2, alpha = 0.3) + # Jittered points for visibility
+  stat_smooth(geom = "smooth", method = "loess", formula = y ~ x, size = 1.2, se = FALSE, span = 0.85) + # LOESS line plot for clear trend line
+  coord_cartesian(xlim = c(0, 10), ylim = c(0, 1)) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1), expand = expansion(mult = c(0.02, 0.07))) +
+  scale_color_viridis_d(
+    option = "inferno", begin = 0.2, end = 0.8,
+    labels = c("Non-commercial", "Commercial")
+  ) +
+  guides(color = guide_legend(reverse = TRUE)) +
+  scale_x_sqrt( # Square root scaling spreads out low-ratio values for clarity
+    breaks = c(0, 0.1, 0.5, 1, 2, 5, 10),
+    labels = c("0", "0.1", "0.5", "1", "2", "5", "10")
+  ) +
+  annotate("label", 
+           x = 7.5, y = 1.0, 
+           label = "Commercial", 
+           color = "#FCA50A",     # text color
+           fill = "white",        # background box color
+           size = 4,              # text size
+           label.size = 0.3,      # border thickness
+           label.r = unit(0.25, "lines"),  # rounded corners
+           hjust = 0, vjust = 0.1) +
+  annotate("label", 
+           x = 5, y = 0.875, 
+           label = "Non-commercial", 
+           color = "#350498", 
+           fill = "white", 
+           size = 4, 
+           label.size = 0.3, 
+           label.r = unit(0.25, "lines"), 
+           hjust = 0) +
+  labs(
+    title = "Success Rates vs. Ratio of Hired Personnel to Team Size by Route Type",
+    x = "Ratio of Hired Personnel to Team Size (Square root scaled)",
+    y = "Success Rate",
+    color = "Commercial route?"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    legend.position = "none"
+  )
+```
+
+### Discussion & Analysis
+The scatter plot shows that expeditions on commercial routes consistently achieved higher success rates across most values of the hired personnel ratio (`ratio_hired`). This is likely because commercial routes are more frequently traveled, thus guides and other hired personnel may be more experienced with these routes and would be able to guide the team of climbers more effectively. In addition, in order to better provide better support and ensure safety on commercial routes, countries such as Nepal have roped in organisations to be involved in fixing ropes, such as Icefall Doctors to fix the ropes in the dangerous Khumbu Icefall area on Everest or contracts to rope-fixing companies such as Seven Summit Treks to fix routes in Everst and Lhtose from Camp 2 onwards **(Benavides, 2022)**. With better infrastructure in place, climbers in commercial routes are able to climb more quickly and easily and are in a better position to achieve a higher likelihood of success.
+
+For expeditions on both commercial and non-commercial routes, success rates generally increased as the proportion of hired personnel rose, particularly up to a 1:1 ratio. This shows that it is essential to have sufficient hired personnel, such as guides or porters, as they can substantially increase the likelihood of a climber reaching the summit. This is because hired personnel often have specialised knowledge about the area and may know key information such as local terrain shortcuts or the best time for a summit push. In addition, they can help manage logistics such as camp setup and food preparation, which reduces the physical burden on climbers, allowing them to focus better on climbing and make better decisions on their physical capabilities and ability to summit **(Devkota, 2023)**. However, beyond the 1:1 ratio level, the success rate started to level off, indicating the diminishing utility of hiring additional personnel. This plateau effect was more noticeable among non-commercial expedition routes.
+
+Overall, the findings suggest that having a balanced team with sufficient hired personnel can increase expedition success, especially for teams taking non-commercial routes, who tend to have lesser resources and support as the routes they are taking are less well-traversed. Thus, regardless of whether teams are taking commercial or non-commercial routes, they should still aim to maintain a 1:1 ratio of hired personnel to team members to achieve higher success rates.<br><br>
+
+
+## Visualisation 3: Bar + Line Plot
+
+### Data Transformation
+We were also interested in exploring how the speed of ascent affects the success rate of climbing expeditions depending on the use of supplementary oxygen. We first filtered out expeditions that had summited within zero days (`SMTDAYS == 0`) as expeditions which are able to do so are extremely skilled and can be considered outliers. Furthermore, these entries could also simply be missing data. Then, we grouped the expeditions based on their peaks and the use of supplementary oxygen, then calculated the average number of days it takes to reach the summit for each mountain based on the use of supplemental oxygen (`speed_mean`). Finally, we calculated the difference in the number of days to summit for each expeidition compared to the average (`speed_diff`).
+
+```{r}
+# Calculate difference in days to summit by peak and oxygen use
+smtdays_diff = clean_df %>%
+  filter(SMTDAYS != 0) %>%
+  group_by(PEAKID, O2NONE) %>%
+  mutate(speed_mean = mean(SMTDAYS, na.rm=TRUE)) %>%
+  mutate(speed_diff = round(SMTDAYS - speed_mean)) %>%
+  ungroup()
+```
+
+In order to better identify trends in the data that would be useful to an average climber, we chose to zero in on the range of values between -20 and +20. Then we binned the values into bins with a width of 4 (`speed_binned`). This allows us to better identify general trends and reduce the influence of the element of luck that often decides the fate of an expedition. The bin size of 4 was chosen as it was the smallest bin size that would still ensure that every bin contained at least one observation. Hence, to focus on the variables that we can change, we also created a `speed_numeric` variable to help us create a line graph. The `O2NONE` variable was not sufficiently clear in its meaning as it was a double negative, hence we created `oxygen_used`. After grouping by the difference in days to summit and the use of oxygen, we can calculate the odds of success based on the climbing patterns of an expedition.
+
+```{r}
+binned_df = smtdays_diff %>%
+  mutate(speed_binned = cut(speed_diff, breaks=seq(-20, 20, by=4))) %>%
+  mutate(speed_numeric = as.numeric(speed_binned)) %>%
+  mutate(oxygen_used = case_when(O2NONE == FALSE ~ "Oxygen Used", O2NONE == TRUE ~ "No Oxygen Used")) %>%
+  group_by(speed_binned, O2NONE) %>%
+  mutate(success_rate = mean(success, na.rm = TRUE)) %>%
+  select(speed_binned, speed_numeric, success_rate, oxygen_used) %>%
+  drop_na()
+```
+
+### Data Visualisation
+We combined a bar plot and a line plot to observe how the climbing speed of an expedition affects its odds of success, faceted based on whether the expedition used supplemental oxygen. 
+
+```{r, fig.cap = "Bar/Line Plot of expedition success rate with & without oxygen use against climbing speed where supplementary oxygen use increases success rate and faster speed has mixed effects"}
+p = ggplot(binned_df, aes(y = success_rate, fill = oxygen_used)) + 
+  geom_bar(stat = "identity", aes(x = speed_binned), position = position_dodge()) + 
+  geom_line(aes(x=speed_numeric), size = 1.25, col="blue") +
+  guides(col = FALSE) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Success Rate vs. Climbing Pace by Oxygen Use",
+       x = "Climbing Pace (measured by the difference in\nthe number of days to summit from the mean)",
+       y = "Success Rate",
+       fill = "Supplementary Oxygen")
+
+p + facet_grid(cols = vars(oxygen_used)) + theme(strip.text = element_blank())
+```
+
+### Discussion & Analysis
+From the bar plot, we can see that expeditions that used supplemental oxygen generally have a significantly greater rate of success than expeditions that did not. This makes sense as atmospheric pressure decreases as a climber gains altitude, which reduces the rate at which oxygen can be taken in by a climber's body. Hence, climbers will find themselves having lower oxygen in their blood just as they are attempting one of the most physically strenuous challenges they can, to summit a tall mountain. 
+
+Clearly, using supplemental oxygen is beneficial as it allows the human body to produce the energy it needs to keep going. Other, less obvious advantages include reducing the incidence of hyperventilation, which is a major source of heat loss, and increasing supply of oxygen to the brain to minimize possible cognitive impairment **(Newcomb, 2010)**. Thus, an expedition that uses supplemental oxygen will find themselves more physically and mentally fit over the duration of the climb, greatly improving their chances of success.
+
+From the line plot, we can see that the relationship between the climbing speed of an expedition and its success rate differs greatly based on whether supplemental oxygen was used. The trends can be seen to be an inverse of one another, with expeditions without supplemental oxygen faring better if they climb at the average pace and worse if they do not, while the reverse is true for expeditions with supplemental oxygen, albeit to a much smaller extent. While the number of observations for the more extreme values (specifically the bins (-20,-16], (-16,-12], (12,16], (16,20]) for both graphs is not large (28 when oxygen is used, 11 otherwise), we believe that the observed trend may provide some insights that are worth discussing.
+
+We shall first examine the case where an expedition does not use supplemental oxygen. When supplemental oxygen is not used, climbers have to obey stricter climbing schedules as they need to limit their time spent in the death zone of 8000m. Go too fast, and climbers will not be able to acclimatize to the lower oxygen levels. Too slow, and every extra day climbers spend at high altitude increases their risk of developing any of the various altitude sicknesses that can be life threatening, such as high altitude pulmonary edema **(Cherney, 2022)**. Even for peaks lower that 8000m, climbers would find it advantageous to follow a tried and tested pace as their margin for error is much thinner.
+
+For expeditions that use supplemental oxygen, it appears that the average climbing pace actually results in a slightly lower success rate. While this is an interesting result, the stronger trend is that using supplemental oxygen creates a flat trend line, where climbing pace becomes a much smaller concern with regards to the rate of success. This is because the use of supplemental oxygen allows climbers to push themselves for more rapid ascents as their need to acclimatize is lower. It also allows climbers to maintain their physical and mental condition for longer periods of time at high altitude by mitigating symptoms of acute mountain syndrome **(Silva-Urra et al., 2011)**, allowing slower expeditions to avoid being drained over time.
+
+# Conclusion
+To address our guiding question: **"What factors influence the success rate of expeditions?"**, we began by examining regional differences through our first visualization. We found that even regions with relatively low peak heights could experience low success rates, suggesting that altitude alone is not the primary determinant of expedition outcomes. Although our analysis did not directly account for factors like terrain difficulty, weather variability, or logistical challenges, these likely contribute to regional disparities and merit further exploration.
+
+Our second visualisation focused on the ratio of hired personnel to team size, revealing that a balanced 1:1 ratio correlates with higher success rates, especially for non-commercial routes whose success rates are more heavily dependent on the ratio of hired personnel to team size. In addition, commercial routes perform better than non-commercial routes due to better infrastructure such as ropes to enable faster climbing.
+
+Our third visualisation explored how climbing speed and oxygen use affects the rate of success. We found that expeditions with supplemental oxygen performed better than expeditions without. This is likely attributed to the increased cognitive and physical benefits associated with having more oxygen at higher altitudes where oxygen concentration is lower. As for the impact of climbing speed on expedition success, we observed that expeditions without supplemental oxygen tend to perform better when following the average climbing pace as that reduces the risks from the lack of oxygen at higher altitudes. On the other hand, for expeditions with supplemental oxygen, climbing speed had little to no impact on expedition success, as the added benefits of oxygen allows climbers to comfortably climb at their desired pace while still having a high chance of success.
+
+**After putting these visualisations together, we conclude that while factors such as peak height, expedition frequency and climbing speed may influence success rate, the composition of the teams and oxygen use plays a much more important role in determining the success rate of an expedition.** <br><br>
+
+
+# Teamwork
+All members contributed equally in various aspects of the project. The work was allocated as follows:
+
+- **Sarah**
+  - Produced R code and write-up for "Visualisation 2: Scatter + Line Plot"<br><br>
+  
+- **Isaiah**
+  - Produced R code and write-up for "Visualisation 3: Bar + Line Plot"<br><br>
+  
+- **Jia Rui**
+  - Supported Isaiah in producing R code for "Visualisation 3: Bar + Line Plot"
+  - Produced R code and write-up for "Introduction" and "Summary"<br><br>
+  
+- **Marcus**
+  - Supported Benson in producing R code for "Visualisation 1: Map"
+  - Produced write up for "Visualisation 1: Map", "Teamwork" and "Conclusion"<br><br>
+
+- **Benson (Yu Cheng)**
+  - Proposed project topic, dataset and question of interest
+  - Produced R code for "Visualisation 1: Map"
+  - Organised and compiled all R code and text into the rmd file<br><br>
+  
+- **Xander**
+  - Supported Sarah in producing R code for "Visualisation 2: Scatter + Line Plot"
+  - Produced R code and write-up for "Data Cleaning"<br><br>
+
+
+# References
+- **Section 1**
+  1. Shiba, P. C., & Barry, C. B. (2025, April 5). Himalayas. Encyclopædia Britannica. https://www.britannica.com/place/Himalayas
+  2. Nicolas, F. (2025, January 21). The History of Himalayan Mountaineering Expeditions. GitHub. https://github.com/rfordatascience/tidytuesday/blob/main/data/2025/2025-01-21/readme.md <br><br>
+
+- **Section 3**
+  3. Protrek Adventure. (n.d.). Best season – Pros and cons of the 4 trekking seasons. Protrek Adventure. https://www.protrekadventure.com/best-season/
+  4. Furtenbach Adventures. (n.d.). Best season for a Mount Everest expedition. Furtenbach Adventures. https://www.furtenbachadventures.com/en/guidebook/best-everest-season/
+  5. Adventure Alternative. (n.d.). Acclimatising safely at altitude and AMS. Adventure Alternative. https://www.adventurealternative.com/resources/acclimatising-safely/ <br><br>
+
+- **Section 4.1.3**
+  6. Benavides, A. (2024, February 14). Khumbu authorities try to curb luxuries at Everest Base Camp. ExplorersWeb. https://explorersweb.com/khumbu-curbing-luxuries-everest-base-camp
+  7. Karki, J. (2023, June 8). Scaling the spectacular: A comprehensive guide to your Dhaulagiri expedition. Luxury Holidays Nepal. https://luxuryholidaynepal.com/blog/dhaulagiri-expedition
+  8. Khanal, S. (2024, July 26). Why is Annapurna so deadly? The truth behind high death rate. Himalayan Masters. https://himalayan-masters.com/annapurna-death-rate <br><br>
+
+- **Section 4.2.3**
+  9. Benavides, A. (2022, March 24). Newcomers’ guide: Fixed ropes in Himalayan climbing. ExplorersWeb. https://explorersweb.com/newcomers-guide-fixed-ropes-in-himalayan-climbing/
+  10. Devkota, P. (2023, May 26). Why are Sherpas helpful in climbing expeditions? Peak Climbing Nepal. https://peakclimbingnepal.com/why-are-sherpas-helpful-in-climbing-expeditions <br><br>
+  
+- **Section 4.3.3**
+  11. Newcomb, L. (2010). Why use oxygen on Everest? the physiological advantages of using supplementary oxygen on the Summit Day. BJA: British Journal of Anaesthesia, 105(eLetters). https://doi.org/10.1093/bja/el_6439
+  12. Cherney, K. (2022, September 22). What is high altitude pulmonary edema (HAPE)?. Healthline. https://www.healthline.com/health/high-altitude-pulmonary-edema#prevention 
+  13. Silva-Urra, J. A., Urizar, C., Basualto-Alarcón, C., Torrella, J. R., Pagés, T., Behn, C., & Viscor, G. (2011). Effects of oxygen supplementation on acute mountain sickness symptoms and functional capacity during a 2-Kilometer walk test on Chajnantor Plateau (5050 meters, northern Chile). Wilderness and Environmental Medicine, 22(3), 250–256. https://doi.org/10.1016/j.wem.2011.05.004
