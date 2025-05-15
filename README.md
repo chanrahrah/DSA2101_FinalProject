@@ -19,13 +19,13 @@ This project aims to investigate the impact of these factors on expedition succe
 R Studio
 
 # Libraries used
-library(tidyverse)
-library(readxl)
-library(stringr)
-library(lubridate)
-library(maps)
-library(ggplot2)
-library(maps)
-library(ggrepel)
-library(rnaturalearth, rnaturalearthdata)
-library(sf)
+- library(tidyverse)
+- library(readxl)
+- library(stringr)
+- library(lubridate)
+- library(maps)
+- library(ggplot2)
+- library(maps)
+- library(ggrepel)
+- library(rnaturalearth, rnaturalearthdata)
+- library(sf)
